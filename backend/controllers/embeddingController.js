@@ -1,15 +1,15 @@
-const {OpenAI} = require('openai')
+const {GoogleGenerativeAI} = require('@google/generative-ai')
 const {Pool} = require('pg')
 
 class EmbeddingController {
   constructor() {
-    if (!process.env.OPENAI_API_KEY) {
-      throw new Error('OPENAI_API_KEY is not set in environment variables')
+    if (!process.env.GEMINI_API_KEY) {
+      throw new Error('GEMINI_API_KEY is not set in environment variables')
     }
 
-    this.openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    })
+    this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
+    this.model = this.genAI.getGenerativeModel({model: 'embedding-001'})
+
     this.pool = new Pool({
       connectionString: process.env.DATABASE_URL,
     })
@@ -17,11 +17,8 @@ class EmbeddingController {
 
   async generateEmbedding(text) {
     try {
-      const response = await this.openai.embeddings.create({
-        input: text,
-        model: 'text-embedding-3-small',
-      })
-      return response.data[0].embedding
+      const result = await this.model.embedContent(text)
+      return result.embedding
     } catch (error) {
       console.error('Error generating embedding:', error)
       throw error
@@ -48,66 +45,41 @@ class EmbeddingController {
 
   async findSimilarProfilesWeighted(embedding, preferences) {
     const query = `
-        SELECT 
-            id,
-            preferences,
-            location,
-            budget_range,
-            travel_style,
-            (
-                0.6 * (embedding <=> $1) +  -- Base similarity
-                0.2 * (ABS(budget_range - $2) / 1000) +  -- Budget similarity
-                0.2 * CASE  -- Travel style match
-                    WHEN travel_style = $3 THEN 0
-                    ELSE 1
-                END
-            ) as weighted_similarity
-        FROM travel_profiles
-        ORDER BY weighted_similarity ASC
-        LIMIT 5;
+      SELECT 
+        id,
+        preferences,
+        location,
+        budget_range,
+        travel_style,
+        (1 - (embedding <=> $1)) as similarity_score
+      FROM travel_profiles
+      WHERE embedding IS NOT NULL
+      ORDER BY similarity_score DESC
+      LIMIT 5;
     `
 
-    const result = await this.pool.query(query, [
-      embedding,
-      preferences.budget_range || 0,
-      preferences.travel_style || '',
-    ])
+    const result = await this.pool.query(query, [embedding])
     return result.rows
   }
 
   async generateCreativeDescription(recommendation) {
     const prompt = `
-        Create an engaging travel description for a destination with these characteristics:
-        Location: ${recommendation.location}
-        Travel Style: ${recommendation.travel_style}
-        Budget Range: $${recommendation.budget_range}
-        
-        Additional Context: ${recommendation.preferences}
-        
-        Please provide a creative, personalized description in 2-3 sentences.
+      Create an engaging travel description for:
+      Location: ${recommendation.location}
+      Travel Style: ${recommendation.travel_style}
+      Budget Range: $${recommendation.budget_range}
+      Context: ${recommendation.preferences}
+      
+      Please provide a creative, personalized description in 2-3 sentences.
     `
 
     try {
-      const response = await this.openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a travel expert who creates engaging, personalized travel descriptions.',
-          },
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        max_tokens: 150,
-        temperature: 0.7,
-      })
-
-      return response.choices[0].message.content
+      const result = await this.model.generateContent(prompt)
+      const response = await result.response
+      return response.text()
     } catch (error) {
-      console.error('Error generating creative description:', error)
-      return null
+      console.error('Error generating description:', error)
+      return recommendation.preferences
     }
   }
 
