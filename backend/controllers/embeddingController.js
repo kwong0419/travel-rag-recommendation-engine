@@ -25,22 +25,28 @@ class EmbeddingController {
     }
   }
 
-  async findSimilarProfiles(embedding, limit = 5) {
+  async findSimilarProfiles(embedding) {
     const query = `
-            SELECT 
-                id,
-                preferences,
-                location,
-                budget_range,
-                travel_style,
-                (embedding <=> $1) as similarity
-            FROM travel_profiles
-            ORDER BY embedding <=> $1
-            LIMIT $5;
-        `
+      SELECT 
+        id,
+        preferences,
+        location,
+        budget_range,
+        travel_style,
+        (1 - (embedding <=> $1::vector)) as similarity_score
+      FROM travel_profiles
+      WHERE embedding IS NOT NULL
+      ORDER BY similarity_score DESC
+      LIMIT 5;
+    `
 
-    const result = await this.pool.query(query, [embedding, limit])
-    return result.rows
+    try {
+      const result = await this.pool.query(query, [embedding])
+      return result.rows
+    } catch (error) {
+      console.error('Database query error:', error)
+      throw error
+    }
   }
 
   async findSimilarProfilesWeighted(embedding, preferences) {
