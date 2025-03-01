@@ -18,7 +18,7 @@ class EmbeddingController {
   async generateEmbedding(text) {
     try {
       const result = await this.model.embedContent(text)
-      return result.embedding
+      return result.embedding.values // Get the raw values array
     } catch (error) {
       console.error('Error generating embedding:', error)
       throw error
@@ -26,13 +26,16 @@ class EmbeddingController {
   }
 
   async findSimilarProfiles(embedding) {
+    // Convert the embedding array to the format pgvector expects
+    const vectorString = `[${embedding.join(',')}]`
+
     const query = `
       SELECT 
         id,
         preferences,
         location,
-        budget_range,
         travel_style,
+        budget_range,
         (1 - (embedding <=> $1::vector)) as similarity_score
       FROM travel_profiles
       WHERE embedding IS NOT NULL
@@ -41,7 +44,10 @@ class EmbeddingController {
     `
 
     try {
-      const result = await this.pool.query(query, [embedding])
+      console.log('Searching with vector:', vectorString.slice(0, 100) + '...') // Debug log
+      const result = await this.pool.query(query, [vectorString])
+      console.log('Found matches:', result.rows.length) // Debug log
+      console.log('First match:', result.rows[0]) // Debug log
       return result.rows
     } catch (error) {
       console.error('Database query error:', error)
